@@ -35,10 +35,11 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 
 func InitHttpClient() {
 	transport := &http.Transport{
-		MaxIdleConns:        common.RelayMaxIdleConns,
-		MaxIdleConnsPerHost: common.RelayMaxIdleConnsPerHost,
-		ForceAttemptHTTP2:   true,
-		Proxy:               http.ProxyFromEnvironment, // Support HTTP_PROXY, HTTPS_PROXY, NO_PROXY env vars
+		MaxIdleConns:          common.RelayMaxIdleConns,
+		ResponseHeaderTimeout: relayResponseHeaderTimeout(),
+		MaxIdleConnsPerHost:   common.RelayMaxIdleConnsPerHost,
+		ForceAttemptHTTP2:     true,
+		Proxy:                 http.ProxyFromEnvironment, // Support HTTP_PROXY, HTTPS_PROXY, NO_PROXY env vars
 	}
 	if common.TLSInsecureSkipVerify {
 		transport.TLSClientConfig = common.InsecureTLSConfig
@@ -106,10 +107,11 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 	switch parsedURL.Scheme {
 	case "http", "https":
 		transport := &http.Transport{
-			MaxIdleConns:        common.RelayMaxIdleConns,
-			MaxIdleConnsPerHost: common.RelayMaxIdleConnsPerHost,
-			ForceAttemptHTTP2:   true,
-			Proxy:               http.ProxyURL(parsedURL),
+			MaxIdleConns:          common.RelayMaxIdleConns,
+			ResponseHeaderTimeout: relayResponseHeaderTimeout(),
+			MaxIdleConnsPerHost:   common.RelayMaxIdleConnsPerHost,
+			ForceAttemptHTTP2:     true,
+			Proxy:                 http.ProxyURL(parsedURL),
 		}
 		if common.TLSInsecureSkipVerify {
 			transport.TLSClientConfig = common.InsecureTLSConfig
@@ -145,9 +147,10 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 		}
 
 		transport := &http.Transport{
-			MaxIdleConns:        common.RelayMaxIdleConns,
-			MaxIdleConnsPerHost: common.RelayMaxIdleConnsPerHost,
-			ForceAttemptHTTP2:   true,
+			MaxIdleConns:          common.RelayMaxIdleConns,
+			ResponseHeaderTimeout: relayResponseHeaderTimeout(),
+			MaxIdleConnsPerHost:   common.RelayMaxIdleConnsPerHost,
+			ForceAttemptHTTP2:     true,
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return dialer.Dial(network, addr)
 			},
@@ -166,4 +169,16 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 	default:
 		return nil, fmt.Errorf("unsupported proxy scheme: %s, must be http, https, socks5 or socks5h", parsedURL.Scheme)
 	}
+}
+
+func relayResponseHeaderTimeout() time.Duration {
+	seconds := common.RelayResponseHeaderTimeout
+	if seconds <= 0 {
+		return 0
+	}
+	const maxSeconds = int64((1<<63 - 1) / time.Second)
+	if int64(seconds) > maxSeconds {
+		return time.Duration(maxSeconds) * time.Second
+	}
+	return time.Duration(seconds) * time.Second
 }

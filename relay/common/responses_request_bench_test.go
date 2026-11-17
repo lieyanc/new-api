@@ -91,7 +91,7 @@ func runResponsesBenchmarkRequest(path string, optimized bool) error {
 	} else {
 		result, err = appcommon.Marshal(*request)
 		if err == nil {
-			result, err = RemoveDisabledFields(result, dto.ChannelOtherSettings{}, false)
+			result, err = legacyBenchmarkFilter(result)
 		}
 	}
 	if err != nil {
@@ -135,4 +135,23 @@ func BenchmarkResponsesBodyPipeline(b *testing.B) {
 			})
 		}
 	}
+}
+
+// Freeze the original default filter so future optimizations cannot silently
+// change the baseline in the phase-one benchmark.
+func legacyBenchmarkFilter(data []byte) ([]byte, error) {
+	var fields map[string]interface{}
+	if err := appcommon.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	for _, key := range []string{"service_tier", "inference_geo", "speed", "safety_identifier"} {
+		delete(fields, key)
+	}
+	if options, ok := fields["stream_options"].(map[string]interface{}); ok {
+		delete(options, "include_obfuscation")
+		if len(options) == 0 {
+			delete(fields, "stream_options")
+		}
+	}
+	return appcommon.Marshal(fields)
 }

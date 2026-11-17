@@ -130,6 +130,9 @@ var BatchUpdateInterval int
 
 var RelayTimeout int // unit is second
 
+// Bounds retained request bodies while waiting for upstream headers; zero disables.
+var RelayResponseHeaderTimeout = 1800 // seconds
+
 var RelayMaxIdleConns int
 var RelayMaxIdleConnsPerHost int
 

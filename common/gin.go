@@ -110,21 +110,28 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 	if err != nil {
 		return err
 	}
-	requestBody, err := storage.Bytes()
-	if err != nil {
-		return err
-	}
 	contentType := c.Request.Header.Get("Content-Type")
-	if strings.HasPrefix(contentType, "application/json") {
-		err = Unmarshal(requestBody, v)
-	} else if strings.Contains(contentType, gin.MIMEPOSTForm) {
-		err = parseFormData(requestBody, v)
-	} else if strings.Contains(contentType, gin.MIMEMultipartPOSTForm) {
-		err = parseMultipartFormData(c, requestBody, v)
+	if strings.HasPrefix(contentType, "application/json") && storage.IsDisk() {
+		reader, readErr := storage.NewReader()
+		if readErr != nil {
+			return readErr
+		}
+		defer reader.Close()
+		err = DecodeJsonBody(reader, v)
 	} else {
-		// skip for now
-		// TODO: someday non json request have variant model, we will need to implementation this
+		requestBody, readErr := storage.Bytes()
+		if readErr != nil {
+			return readErr
+		}
+		if strings.HasPrefix(contentType, "application/json") {
+			err = Unmarshal(requestBody, v)
+		} else if strings.Contains(contentType, gin.MIMEPOSTForm) {
+			err = parseFormData(requestBody, v)
+		} else if strings.Contains(contentType, gin.MIMEMultipartPOSTForm) {
+			err = parseMultipartFormData(c, requestBody, v)
+		}
 	}
+
 	if err != nil {
 		return err
 	}

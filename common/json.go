@@ -3,7 +3,10 @@ package common
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
+
+	bodyjson "github.com/MoeForge/moego/json"
 )
 
 func Unmarshal(data []byte, v any) error {
@@ -58,4 +61,22 @@ func JsonRawMessageToString(data json.RawMessage) string {
 		return string(trimmed)
 	}
 	return value
+}
+
+// DecodeJsonBody decodes exactly one JSON value. Seekable disk readers let the
+// decoder skip large unused fields without loading the complete body.
+// General Marshal/Unmarshal retain the v0.13.2 codec and ownership semantics.
+func DecodeJsonBody(reader io.Reader, v any) error {
+	decoder := bodyjson.NewDecoder(reader)
+	if err := decoder.Decode(v); err != nil {
+		return err
+	}
+	var extra struct{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return err
+		}
+		return errors.New("multiple JSON values in request body")
+	}
+	return nil
 }

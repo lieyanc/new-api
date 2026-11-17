@@ -299,6 +299,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
+	configureReplayableBody(req, requestBody)
 	headers := req.Header
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
@@ -332,6 +333,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	}
 	// set form data
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
+	configureReplayableBody(req, requestBody)
 	headers := req.Header
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
@@ -524,8 +526,8 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		return nil, errors.New("resp is nil")
 	}
 
-	_ = req.Body.Close()
-	_ = c.Request.Body.Close()
+	// net/http owns the outbound cursor; response headers can arrive while
+	// the transport is still sending the request. Do not close it here.
 	return resp, nil
 }
 
@@ -551,4 +553,16 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}
 	return resp, nil
+}
+
+// configureReplayableBody preserves Content-Length and gives transport retries
+// a fresh cursor. GetBody must never return the reader from an earlier attempt.
+func configureReplayableBody(req *http.Request, body io.Reader) {
+	if replay, ok := body.(common2.ReplayableBody); ok {
+		req.ContentLength = replay.Size()
+		req.GetBody = replay.NewReader
+		if req.ContentLength == 0 {
+			req.Body = http.NoBody
+		}
+	}
 }

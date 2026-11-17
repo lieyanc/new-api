@@ -1,0 +1,29 @@
+goos: linux
+goarch: amd64
+pkg: github.com/QuantumNous/new-api/relay/common
+cpu: Intel(R) Xeon(R) W-2235 CPU @ 3.80GHz
+BenchmarkLargeResponsesRelayMemory/phase1/concurrency=4-2         	       1	3355793003 ns/op	  85.43 MB/s	       546.9 held-MiB/batch	2293971120 B/op	    4000 allocs/op
+PASS
+	Command being timed: "./relay-memory-bench.test -test.run=^$ -test.bench=^BenchmarkLargeResponsesRelayMemory$/^phase1$/^concurrency=4$ -test.benchtime=1x -test.count=1"
+	User time (seconds): 6.13
+	System time (seconds): 0.90
+	Percent of CPU this job got: 201%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:03.49
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1561908
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 387888
+	Voluntary context switches: 1254
+	Involuntary context switches: 40
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -781,74 +782,50 @@ func FailTaskInfo(reason string) *TaskInfo {
 // store: 数据存储授权字段，涉及用户隐私（仅 OpenAI、Responses API 支持，默认允许透传，禁用后可能导致 Codex 无法使用）
 // safety_identifier: 安全标识符，用于向 OpenAI 报告违规用户（仅 OpenAI 支持，涉及用户隐私）
 // stream_options.include_obfuscation: 响应流混淆控制字段（仅 OpenAI Responses API 支持）
-func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings, channelPassThroughEnabled bool) ([]byte, error) {
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelPassThroughEnabled {
+func RemoveDisabledFields(jsonData []byte, settings dto.ChannelOtherSettings, passThrough bool) ([]byte, error) {
+	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || passThrough {
 		return jsonData, nil
 	}
-
-	var data map[string]interface{}
-	if err := common.Unmarshal(jsonData, &data); err != nil {
-		common.SysError("RemoveDisabledFields Unmarshal error :" + err.Error())
+	if !ojson.ValidBytes(jsonData) {
+		common.SysError("RemoveDisabledFields: invalid JSON")
 		return jsonData, nil
 	}
-
-	// 默认移除 service_tier，除非明确允许（避免额外计费风险）
-	if !channelOtherSettings.AllowServiceTier {
-		if _, exists := data["service_tier"]; exists {
-			delete(data, "service_tier")
+	doc := ojson.NewDoc(jsonData)
+	var paths []string
+	if !settings.AllowServiceTier {
+		paths = append(paths, "service_tier")
+	}
+	if !settings.AllowInferenceGeo {
+		paths = append(paths, "inference_geo")
+	}
+	if !settings.AllowSpeed {
+		paths = append(paths, "speed")
+	}
+	if settings.DisableStore {
+		paths = append(paths, "store")
+	}
+	if !settings.AllowSafetyIdentifier {
+		paths = append(paths, "safety_identifier")
+	}
+	for _, path := range paths {
+		if err := DeleteJSONMember(doc, path); err != nil {
+			return nil, err
 		}
 	}
-
-	// 默认移除 inference_geo，除非明确允许（避免在未授权情况下透传数据驻留区域）
-	if !channelOtherSettings.AllowInferenceGeo {
-		if _, exists := data["inference_geo"]; exists {
-			delete(data, "inference_geo")
+	if !settings.AllowIncludeObfuscation && doc.Get("stream_options").IsObject() {
+		if err := DeleteJSONMember(doc, "stream_options.include_obfuscation"); err != nil {
+			return nil, err
 		}
-	}
-
-	// 默认移除 speed，除非明确允许（避免意外切换 Claude 推理速度模式）
-	if !channelOtherSettings.AllowSpeed {
-		if _, exists := data["speed"]; exists {
-			delete(data, "speed")
-		}
-	}
-
-	// 默认允许 store 透传，除非明确禁用（禁用可能影响 Codex 使用）
-	if channelOtherSettings.DisableStore {
-		if _, exists := data["store"]; exists {
-			delete(data, "store")
-		}
-	}
-
-	// 默认移除 safety_identifier，除非明确允许（保护用户隐私，避免向 OpenAI 报告用户信息）
-	if !channelOtherSettings.AllowSafetyIdentifier {
-		if _, exists := data["safety_identifier"]; exists {
-			delete(data, "safety_identifier")
-		}
-	}
-
-	// 默认移除 stream_options.include_obfuscation，除非明确允许（避免关闭响应流混淆保护）
-	if !channelOtherSettings.AllowIncludeObfuscation {
-		if streamOptionsAny, exists := data["stream_options"]; exists {
-			if streamOptions, ok := streamOptionsAny.(map[string]interface{}); ok {
-				if _, includeExists := streamOptions["include_obfuscation"]; includeExists {
-					delete(streamOptions, "include_obfuscation")
-				}
-				if len(streamOptions) == 0 {
-					delete(data, "stream_options")
-				} else {
-					data["stream_options"] = streamOptions
-				}
+		if len(doc.Get("stream_options").Map()) == 0 {
+			if err := DeleteJSONMember(doc, "stream_options"); err != nil {
+				return nil, err
 			}
 		}
 	}
-
-	jsonDataAfter, err := common.Marshal(data)
-	if err != nil {
-		common.SysError("RemoveDisabledFields Marshal error :" + err.Error())
+	if doc.Len() == len(jsonData) {
 		return jsonData, nil
 	}
-	return jsonDataAfter, nil
+	return doc.Bytes(), nil
 }
 
 // RemoveGeminiDisabledFields removes disabled fields from Gemini request JSON data
