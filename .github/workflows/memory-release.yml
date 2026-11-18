@@ -1,0 +1,118 @@
+name: Publish v0.13.2 memory-optimized image
+run-name: Publish ${{ inputs.version }} from ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Immutable fork version, e.g. v0.13.2-memory.1'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: memory-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GOEXPERIMENT: greenteagc
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Validate release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" == 'v0.13.2-memory-opt' ]]
+          [[ "$RELEASE_VERSION" =~ ^v0\.13\.2-memory\.[0-9]+$ ]]
+          if gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo 'This version is already published; choose a new version.' >&2
+            exit 1
+          fi
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_VERSION" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.26.1'
+          cache: true
+      - name: Test affected paths with the image Go version
+        run: |
+          go test -p 2 ./common ./relay/common ./relay/channel ./service ./relay -run 'Test(DeepCopy|BodyReplay|DiskBody|ApplyParamOverride|RemoveDisabledFields|MarshalResponsesRequest|OutboundBody|DisabledField|BatchedParam|ReplayableRequest|ResponseHeaderTimeout)' -count=1
+          go test -race -p 2 ./common -run 'Test(BodyReplay|DiskBody)' -count=1
+      - name: Build linux/amd64 image
+        run: |
+          printf '%s\n' "$RELEASE_VERSION" > VERSION
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$RELEASE_VERSION" \
+            -t "$IMAGE" .
+      - name: Smoke test built image
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_secret=$(openssl rand -hex 32)
+          docker run -d --name memory-image-smoke \
+            -p 127.0.0.1:18080:3000 \
+            -e SESSION_SECRET="$smoke_secret" \
+            -e SQLITE_PATH=/data/smoke.db "$IMAGE"
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/api/status > /tmp/image-status.json; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$ready" != true ]]; then
+            docker logs --tail 80 memory-image-smoke
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, os
+          status = json.load(open('/tmp/image-status.json'))
+          assert status['success'] is True, status
+          assert status['data']['version'] == os.environ['RELEASE_VERSION'], status['data'].get('version')
+          print('Version and status smoke checks passed.')
+          PY
+          curl -fsS http://127.0.0.1:18080/ > /tmp/image-index.html
+          grep -qi '<html' /tmp/image-index.html
+          docker rm -f memory-image-smoke
+      - name: Publish image and portable archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_REPOSITORY_OWNER" --password-stdin
+          docker push "$IMAGE"
+          mkdir -p release-assets
+          docker save "$IMAGE" | gzip -1 > "release-assets/new-api-$RELEASE_VERSION-linux-amd64.tar.gz"
+          docker image inspect "$IMAGE" > /tmp/published-image.json
+          python3 - <<'PY'
+          import json, os
+          item = json.load(open('/tmp/published-image.json'))[0]
+          with open('release-assets/image.json', 'w') as output:
+              json.dump({'image': os.environ['IMAGE'], 'image_id': item['Id'],
+                         'repo_digests': item['RepoDigests'], 'revision': os.environ['GITHUB_SHA'],
+                         'version': os.environ['RELEASE_VERSION'], 'platform': 'linux/amd64'}, output, indent=2)
+          PY
+          (cd release-assets && sha256sum *.tar.gz image.json > SHA256SUMS)
+          cat > /tmp/release-notes.md <<'NOTES'
+          Memory-optimized new-api based on v0.13.2. Includes bulk RawMessage copies, Responses field filtering, disk-backed outbound JSON, independent request replay cursors, lower-copy parameter edits, and a configurable upstream response-header timeout (default 1800 seconds).
+
+          The image was tested with Go 1.26.1, targeted regression/race tests, and an isolated SQLite startup/frontend smoke check. Disk-cache settings control outbound spill behavior. This is a v0.13.2 fork release; it does not upgrade the application to v1.0.
+
+          `image.json` records the source revision, image ID, and registry digest. The compressed Docker archive supports verified offline deployment via `docker load`. See `SHA256SUMS` before importing it.
+          NOTES
+          gh release create "$RELEASE_VERSION" --target "$GITHUB_SHA" \
+            --title "new-api $RELEASE_VERSION" --notes-file /tmp/release-notes.md \
+            --latest=false release-assets/*
+      - name: Cleanup smoke container
+        if: always()
+        run: docker rm -f memory-image-smoke 2>/dev/null || true
