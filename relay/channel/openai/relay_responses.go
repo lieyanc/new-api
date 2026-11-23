@@ -17,6 +17,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func copyResponsesCacheDetails(dst, src *dto.InputTokenDetails) {
+	if src == nil {
+		return
+	}
+	dst.CachedTokens = src.CachedTokens
+	dst.CachedCreationTokens = src.CachedCreationTokens
+	dst.CacheWriteTokens = src.CacheWriteTokens
+	dst.CacheWriteTokensDetails = src.CacheWriteTokensDetails
+}
+
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
@@ -49,9 +59,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		usage.PromptTokens = responsesResponse.Usage.InputTokens
 		usage.CompletionTokens = responsesResponse.Usage.OutputTokens
 		usage.TotalTokens = responsesResponse.Usage.TotalTokens
-		if responsesResponse.Usage.InputTokensDetails != nil {
-			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
-		}
+		copyResponsesCacheDetails(&usage.PromptTokensDetails, responsesResponse.Usage.InputTokensDetails)
 	}
 	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
 		return &usage, nil
@@ -102,9 +110,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					if streamResponse.Response.Usage.TotalTokens != 0 {
 						usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
 					}
-					if streamResponse.Response.Usage.InputTokensDetails != nil {
-						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
-					}
+					copyResponsesCacheDetails(&usage.PromptTokensDetails, streamResponse.Response.Usage.InputTokensDetails)
 				}
 				if streamResponse.Response.HasImageGenerationCall() {
 					c.Set("image_generation_call", true)

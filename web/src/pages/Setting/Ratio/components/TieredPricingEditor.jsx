@@ -222,6 +222,9 @@ function tryParseVisualConfig(exprStr) {
         const val = simple[4 + i];
         if (val != null) tier[cv.field] = Number(val);
       });
+      // A zero-priced category still excludes tokens from p/c. Keep it in
+      // raw mode because the visual editor omits zero-valued optional fields.
+      if (CACHE_VAR_MAP.some((cv) => tier[cv.field] === 0)) return null;
       return normalizeVisualConfig({ tiers: [normalizeVisualTier(tier)] });
     }
 
@@ -385,11 +388,12 @@ const CACHE_FIELDS_TIMED = [
 const CACHE_FIELDS_GENERIC = [
   { field: 'cache_read_unit_cost', labelKey: '缓存读取价格' },
   { field: 'cache_create_unit_cost', labelKey: '缓存创建价格' },
+  { field: 'cache_create_12h_unit_cost', labelKey: '12h缓存创建价格' },
 ];
 
 function ExtendedPriceBlock({ tier, index, onUpdate, t }) {
   const mediaFields = BILLING_EXTRA_VARS.filter((v) => v.group === 'media');
-  const hasAny = [...CACHE_FIELDS_TIMED, ...mediaFields.map((v) => v.tierField)].some(
+  const hasAny = [...CACHE_FIELDS_TIMED, ...CACHE_FIELDS_GENERIC, ...mediaFields.map((v) => v.tierField)].some(
     (f) => Number(tier[typeof f === 'string' ? f : f.field]) > 0,
   );
   const [expanded, setExpanded] = useState(hasAny);
@@ -400,6 +404,8 @@ function ExtendedPriceBlock({ tier, index, onUpdate, t }) {
     const patch = { cache_mode: mode };
     if (mode === CACHE_MODE_GENERIC) {
       patch.cache_create_1h_unit_cost = 0;
+    } else {
+      patch.cache_create_12h_unit_cost = 0;
     }
     onUpdate(index, patch);
   };
@@ -885,7 +891,8 @@ function RawExprEditor({ exprString, onChange, t }) {
               {t('输出 Token')}), <code>len</code> ({t('输入长度')}),{' '}
               <code>cr</code> ({t('缓存读取')}),{' '}
               <code>cc</code> ({t('缓存创建')}),{' '}
-              <code>cc1h</code> ({t('缓存创建-1小时')})
+              <code>cc1h</code> ({t('缓存创建-1小时')}),{' '}
+              <code>cc12h</code> ({t('12h缓存创建')})
             </div>
             <div>
               {t('函数')}: <code>tier(name, value)</code>,{' '}
@@ -974,7 +981,8 @@ function evalExprLocally(exprStr, p, c, extraTokenValues) {
     const cacheReadTokens = extraTokenValues.cacheReadTokens || 0;
     const cacheCreateTokens = extraTokenValues.cacheCreateTokens || 0;
     const cacheCreate1hTokens = extraTokenValues.cacheCreate1hTokens || 0;
-    const len = p + cacheReadTokens + cacheCreateTokens + cacheCreate1hTokens;
+    const cacheCreate12hTokens = extraTokenValues.cacheCreate12hTokens || 0;
+    const len = p + cacheReadTokens + cacheCreateTokens + cacheCreate1hTokens + cacheCreate12hTokens;
     const env = { p, c, len, tier: tierFn, max: Math.max, min: Math.min, abs: Math.abs, ceil: Math.ceil, floor: Math.floor };
     for (const field of EXTRA_ESTIMATOR_FIELDS) {
       env[field.var] = extraTokenValues[field.stateKey] || 0;
@@ -1245,6 +1253,7 @@ const LLM_PROMPT_TEMPLATE = `你是一个 AI API 计费表达式设计助手。�
 - cr — 缓存命中（读取）token 数
 - cc — 缓存创建 token 数（5分钟 TTL）
 - cc1h — 缓存创建 token 数（1小时 TTL，Claude 专用）
+- cc12h — 缓存创建 token 数（12小时 TTL，OpenAI）
 - img — 图片输入 token 数
 - ai — 音频输入 token 数
 
@@ -1382,6 +1391,7 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
   const [cacheReadTokens, setCacheReadTokens] = useState(0);
   const [cacheCreateTokens, setCacheCreateTokens] = useState(0);
   const [cacheCreate1hTokens, setCacheCreate1hTokens] = useState(0);
+  const [cacheCreate12hTokens, setCacheCreate12hTokens] = useState(0);
   const [imageTokens, setImageTokens] = useState(0);
   const [imageOutputTokens, setImageOutputTokens] = useState(0);
   const [audioInputTokens, setAudioInputTokens] = useState(0);
@@ -1493,11 +1503,12 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
   );
 
   const extraTokenValues = {
-    cacheReadTokens, cacheCreateTokens, cacheCreate1hTokens,
+    cacheReadTokens, cacheCreateTokens, cacheCreate1hTokens, cacheCreate12hTokens,
     imageTokens, imageOutputTokens, audioInputTokens, audioOutputTokens,
   };
   const extraTokenSetters = {
     cacheReadTokens: setCacheReadTokens, cacheCreateTokens: setCacheCreateTokens,
+    cacheCreate12hTokens: setCacheCreate12hTokens,
     cacheCreate1hTokens: setCacheCreate1hTokens, imageTokens: setImageTokens,
     imageOutputTokens: setImageOutputTokens, audioInputTokens: setAudioInputTokens,
     audioOutputTokens: setAudioOutputTokens,
@@ -1511,7 +1522,7 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
       return result;
     },
     [effectiveExpr, promptTokens, completionTokens,
-      cacheReadTokens, cacheCreateTokens, cacheCreate1hTokens,
+      cacheReadTokens, cacheCreateTokens, cacheCreate1hTokens, cacheCreate12hTokens,
       imageTokens, imageOutputTokens, audioInputTokens, audioOutputTokens],
   );
 

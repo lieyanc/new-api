@@ -253,11 +253,33 @@ type OpenAIVideoResponse struct {
 }
 
 type InputTokenDetails struct {
-	CachedTokens         int `json:"cached_tokens"`
-	CachedCreationTokens int `json:"cached_creation_tokens,omitempty"`
-	TextTokens           int `json:"text_tokens"`
-	AudioTokens          int `json:"audio_tokens"`
-	ImageTokens          int `json:"image_tokens"`
+	CachedTokens            int                     `json:"cached_tokens"`
+	CachedCreationTokens    int                     `json:"cached_creation_tokens,omitempty"`
+	CacheWriteTokens        int                     `json:"cache_write_tokens,omitempty"`
+	CacheWriteTokensDetails *CacheWriteTokenDetails `json:"cache_write_tokens_details,omitempty"`
+	TextTokens              int                     `json:"text_tokens"`
+	AudioTokens             int                     `json:"audio_tokens"`
+	ImageTokens             int                     `json:"image_tokens"`
+}
+
+// CacheWriteTokenDetails splits OpenAI cache writes by lifetime.
+type CacheWriteTokenDetails struct {
+	TTL30mTokens int `json:"ttl_30m_tokens"`
+	TTL12hTokens int `json:"ttl_12h_tokens"`
+}
+
+// CacheWriteSplit returns the aggregate and its 12-hour subset. Providers
+// may send either spelling of the aggregate or just the lifetime breakdown.
+func (d InputTokenDetails) CacheWriteSplit() (total, long int) {
+	total = max(0, d.CacheWriteTokens, d.CachedCreationTokens)
+	if details := d.CacheWriteTokensDetails; details != nil {
+		long = max(0, details.TTL12hTokens)
+		if total == 0 {
+			total = max(0, details.TTL30mTokens) + long
+		}
+		long = min(total, long)
+	}
+	return total, long
 }
 
 type OutputTokenDetails struct {

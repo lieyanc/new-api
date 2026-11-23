@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -450,6 +451,33 @@ func ratioQuota(usage *dto.Usage, isClaudeSemantic bool, modelRatio, completionR
 	result := promptQuota.Add(completionQuota).Mul(ratio)
 	f, _ := result.Float64()
 	return f
+}
+
+func TestBuildTieredTokenParams_OpenAI12hCacheWrites(t *testing.T) {
+	const response = `{"usage":{"input_tokens":12000,"input_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000,"cache_write_tokens_details":{"ttl_30m_tokens":3000,"ttl_12h_tokens":4000}}}}`
+	var upstream dto.OpenAIResponsesResponse
+	if err := common.UnmarshalJsonStr(response, &upstream); err != nil {
+		t.Fatal(err)
+	}
+	_, usage, err := ResponsesResponseToChatCompletionsResponse(&upstream, "resp_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		expr string
+		want float64
+	}{
+		{`v1:len == 12000 ? tier("base", p + cr * 0.1 + cc * 2 + cc12h * 5) : 0`, 27400},
+		{`tier("base", p + cc12h * 5)`, 28000},
+		{`tier("base", p + cc * 2)`, 19000},
+		{`tier("base", p)`, 12000},
+	} {
+		params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(tc.expr))
+		got, _, err := billingexpr.RunExpr(tc.expr, params)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: got %v, want %v, error %v", tc.expr, got, tc.want, err)
+		}
+	}
 }
 
 func TestBuildTieredTokenParams_GPT_WithCache(t *testing.T) {
