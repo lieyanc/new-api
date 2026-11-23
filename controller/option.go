@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"strings"
 
+	"encoding/json"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -317,4 +319,27 @@ func UpdateOption(c *gin.Context) {
 		"message": "",
 	})
 	return
+}
+
+// PreviewBillingExpression evaluates sample inputs with the production engine.
+func PreviewBillingExpression(c *gin.Context) {
+	var req struct {
+		Expression string                  `json:"expression"`
+		Tokens     billingexpr.TokenParams `json:"tokens"`
+		ImageCount *int                    `json:"image_count"`
+		Usage      map[string]any          `json:"usage"`
+		Headers    map[string]string       `json:"headers"`
+		Body       json.RawMessage         `json:"body"`
+	}
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	snap := billingexpr.BillingSnapshot{ExprString: req.Expression, ExprHash: billingexpr.ExprHashString(req.Expression), TaskUsageBilling: billingexpr.UsedVars(req.Expression)["u"], QuotaPerUnit: common.QuotaPerUnit, GroupRatio: 1}
+	result, err := billingexpr.ComputeTieredQuotaWithRequest(&snap, req.Tokens, billingexpr.RequestInput{Usage: req.Usage, ImageCount: req.ImageCount, Headers: req.Headers, Body: req.Body})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"cost": result.ActualQuotaBeforeGroup, "matchedTier": result.MatchedTier})
 }

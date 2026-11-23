@@ -33,7 +33,7 @@ import {
 } from '@douyinfe/semi-ui';
 import { IconCopy, IconDelete, IconPlus } from '@douyinfe/semi-icons';
 import { renderQuota } from '../../../../helpers/render';
-import { copy, showSuccess } from '../../../../helpers';
+import { API, copy, showSuccess } from '../../../../helpers';
 import { BILLING_EXTRA_VARS, BILLING_CACHE_VAR_MAP, BILLING_CONDITION_VARS } from '../../../../constants';
 import {
   createEmptyCondition,
@@ -971,32 +971,6 @@ function CacheTokenEstimatorInputs({
 // Cost estimator (works with any Expr string)
 // ---------------------------------------------------------------------------
 
-function evalExprLocally(exprStr, p, c, extraTokenValues) {
-  try {
-    let matchedTier = '';
-    const tierFn = (name, value) => {
-      matchedTier = name;
-      return value;
-    };
-    const cacheReadTokens = extraTokenValues.cacheReadTokens || 0;
-    const cacheCreateTokens = extraTokenValues.cacheCreateTokens || 0;
-    const cacheCreate1hTokens = extraTokenValues.cacheCreate1hTokens || 0;
-    const cacheCreate12hTokens = extraTokenValues.cacheCreate12hTokens || 0;
-    const len = p + cacheReadTokens + cacheCreateTokens + cacheCreate1hTokens + cacheCreate12hTokens;
-    const env = { p, c, len, tier: tierFn, max: Math.max, min: Math.min, abs: Math.abs, ceil: Math.ceil, floor: Math.floor };
-    for (const field of EXTRA_ESTIMATOR_FIELDS) {
-      env[field.var] = extraTokenValues[field.stateKey] || 0;
-    }
-    const fn = new Function(
-      ...Object.keys(env),
-      `"use strict"; return (${exprStr});`,
-    );
-    return { cost: fn(...Object.values(env)), matchedTier, error: null };
-  } catch (e) {
-    return { cost: 0, matchedTier: '', error: e.message };
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Request condition rule row (moved from RequestMultiplierEditor)
 // ---------------------------------------------------------------------------
@@ -1254,6 +1228,10 @@ const LLM_PROMPT_TEMPLATE = `你是一个 AI API 计费表达式设计助手。�
 - cc — 缓存创建 token 数（5分钟 TTL）
 - cc1h — 缓存创建 token 数（1小时 TTL，Claude 专用）
 - cc12h — 缓存创建 token 数（12小时 TTL，OpenAI）
+- img_cr — 缓存命中的图片输入 token 数
+- image_count — 同步图片计费张数
+- fixed(0.01) — 每次请求 0.01 美元，写作 tier("request", fixed(0.01))
+- u("seconds") — 异步任务用量，任务表达式的结果单位为美元
 - img — 图片输入 token 数
 - ai — 音频输入 token 数
 
@@ -1392,6 +1370,10 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
   const [cacheCreateTokens, setCacheCreateTokens] = useState(0);
   const [cacheCreate1hTokens, setCacheCreate1hTokens] = useState(0);
   const [cacheCreate12hTokens, setCacheCreate12hTokens] = useState(0);
+  const [imageCacheTokens, setImageCacheTokens] = useState(0);
+  const [imageCount, setImageCount] = useState(1);
+  const [usageJson, setUsageJson] = useState('{"seconds": 5}');
+  const [requestJson, setRequestJson] = useState('{"headers": {}, "body": {}}');
   const [imageTokens, setImageTokens] = useState(0);
   const [imageOutputTokens, setImageOutputTokens] = useState(0);
   const [audioInputTokens, setAudioInputTokens] = useState(0);
@@ -1426,7 +1408,7 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
       setRawExpr(currentExpr);
     } else if (currentExpr) {
       setEditorMode('raw');
-      setRawExpr(currentExpr);
+      setRawExpr(combineBillingExpr(currentExpr, currentRequestRuleExpr));
       setVisualConfig(null);
     } else {
       setEditorMode('visual');
@@ -1444,10 +1426,10 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
   }, [editorMode, visualConfig, rawExpr]);
 
   useEffect(() => {
-    if (effectiveExpr !== currentExpr) {
+    if ((editorMode === 'raw' || visualConfig) && effectiveExpr !== currentExpr) {
       onExprChange(effectiveExpr);
     }
-  }, [effectiveExpr]);
+  }, [effectiveExpr, editorMode, visualConfig]);
 
   const handleVisualChange = useCallback((newConfig) => {
     setVisualConfig(newConfig);
@@ -1504,27 +1486,49 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
 
   const extraTokenValues = {
     cacheReadTokens, cacheCreateTokens, cacheCreate1hTokens, cacheCreate12hTokens,
-    imageTokens, imageOutputTokens, audioInputTokens, audioOutputTokens,
+    imageCacheTokens, imageTokens, imageOutputTokens, audioInputTokens, audioOutputTokens,
   };
   const extraTokenSetters = {
     cacheReadTokens: setCacheReadTokens, cacheCreateTokens: setCacheCreateTokens,
     cacheCreate12hTokens: setCacheCreate12hTokens,
     cacheCreate1hTokens: setCacheCreate1hTokens, imageTokens: setImageTokens,
-    imageOutputTokens: setImageOutputTokens, audioInputTokens: setAudioInputTokens,
+    imageCacheTokens: setImageCacheTokens, imageOutputTokens: setImageOutputTokens, audioInputTokens: setAudioInputTokens,
     audioOutputTokens: setAudioOutputTokens,
   };
 
-  const evalResult = useMemo(() => {
-      const result = evalExprLocally(effectiveExpr, promptTokens, completionTokens, extraTokenValues);
-      if (!result.error) {
-        result.cost = result.cost / 1000000 * (parseFloat(localStorage.getItem('quota_per_unit')) || 500000);
+  const previewExpr = combineBillingExpr(effectiveExpr, currentRequestRuleExpr);
+  const usesUsage = /\bu\s*\(/.test(previewExpr);
+  const usesRequest = /\b(header|param)\s*\(/.test(previewExpr);
+  const [evalResult, setEvalResult] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    setEvalResult(null);
+    const timer = setTimeout(async () => {
+      try {
+        const context = usesRequest ? JSON.parse(requestJson) : {};
+        const tokens = {
+          P: promptTokens, C: completionTokens,
+          Len: promptTokens + cacheReadTokens + cacheCreateTokens + cacheCreate1hTokens + cacheCreate12hTokens + imageCacheTokens + imageTokens + audioInputTokens,
+          CR: cacheReadTokens, CC: cacheCreateTokens, CC1h: cacheCreate1hTokens,
+          CC12h: cacheCreate12hTokens, Img: imageTokens, ImgCR: imageCacheTokens,
+          ImgO: imageOutputTokens, AI: audioInputTokens, AO: audioOutputTokens,
+        };
+        const { data } = await API.post('/api/option/billing_preview', {
+          expression: previewExpr, tokens, image_count: imageCount,
+          headers: context.headers, body: context.body,
+          usage: usesUsage ? JSON.parse(usageJson) : undefined,
+        });
+        if (active) setEvalResult(data.success ? data.data : { error: data.message });
+      } catch (err) {
+        if (active) setEvalResult({ error: err.message });
       }
-      return result;
-    },
-    [effectiveExpr, promptTokens, completionTokens,
-      cacheReadTokens, cacheCreateTokens, cacheCreate1hTokens, cacheCreate12hTokens,
-      imageTokens, imageOutputTokens, audioInputTokens, audioOutputTokens],
-  );
+    }, 250);
+    return () => { active = false; clearTimeout(timer); };
+  }, [previewExpr, promptTokens, completionTokens, cacheReadTokens, cacheCreateTokens,
+    cacheCreate1hTokens, cacheCreate12hTokens, imageTokens, imageCacheTokens,
+    imageOutputTokens, audioInputTokens, audioOutputTokens, imageCount,
+    usesUsage, usageJson, usesRequest, requestJson]);
 
   return (
     <div>
@@ -1535,7 +1539,7 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
           value={editorMode}
           onChange={handleModeSwitch}
         >
-          <Radio value='visual'>{t('可视化编辑')}</Radio>
+          <Radio value='visual' disabled={editorMode === 'raw' && !!effectiveExpr && !tryParseVisualConfig(effectiveExpr)}>{t('可视化编辑')}</Radio>
           <Radio value='raw'>{t('表达式编辑')}</Radio>
         </RadioGroup>
       </div>
@@ -1653,6 +1657,11 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
             />
           </div>
         </div>
+        {/\bimage_count\b/.test(previewExpr) && (
+          <label>image_count <InputNumber min={1} max={128} value={imageCount} onChange={(n) => setImageCount(n ?? 1)} /></label>
+        )}
+        {usesUsage && <label>{t('任务用量')} (JSON)<TextArea value={usageJson} onChange={setUsageJson} /></label>}
+        {usesRequest && <label>{t('请求参数')} (JSON)<TextArea value={requestJson} onChange={setRequestJson} /></label>}
         {/* Cache token inputs — shown when expression uses cache variables */}
         <CacheTokenEstimatorInputs
           effectiveExpr={effectiveExpr}
@@ -1664,13 +1673,13 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
           style={{
             padding: '10px 14px',
             borderRadius: 8,
-            background: evalResult.error
+            background: evalResult?.error
               ? 'var(--semi-color-danger-light-default)'
               : 'var(--semi-color-primary-light-default)',
-            border: `1px solid ${evalResult.error ? 'var(--semi-color-danger)' : 'var(--semi-color-primary)'}`,
+            border: `1px solid ${evalResult?.error ? 'var(--semi-color-danger)' : 'var(--semi-color-primary)'}`,
           }}
         >
-          {evalResult.error ? (
+          {!evalResult ? t('加载中') : evalResult.error ? (
             <Text type='danger'>
               {t('表达式错误')}: {evalResult.error}
             </Text>

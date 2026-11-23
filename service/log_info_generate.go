@@ -280,5 +280,9 @@ func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommo
 	other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
 	if result != nil {
 		other["matched_tier"] = result.MatchedTier
+		if result.FixedPrice != nil {
+			other["fixed_price"] = *result.FixedPrice
+			other["billing_unit"] = "request"
+		}
 	}
 }

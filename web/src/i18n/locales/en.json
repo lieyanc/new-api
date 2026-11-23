@@ -1,5 +1,10 @@
 {
   "translation": {
+    "图片缓存读取": "Cached image input",
+    "图片缓存读取价格": "Cached image input price",
+    "任务用量": "Task usage",
+    "请求参数": "Request parameters",
+    "图片缓存读取 Token (img_cr)": "Cached image input Token (img_cr)",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Web search {{count}} time / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web search {{count}} times / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + Image generation call {{symbol}}{{price}} / 1 time * {{ratioType}} {{ratio}}",

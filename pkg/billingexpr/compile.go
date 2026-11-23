@@ -3,11 +3,13 @@ package billingexpr
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/parser"
 	"github.com/expr-lang/expr/vm"
 )
 
@@ -26,10 +28,38 @@ func ParseExprVersion(exprStr string) (version int, body string) {
 	return DefaultExprVersion, exprStr
 }
 
+func requestRuleNumber(node ast.Node) (float64, bool) {
+	switch value := node.(type) {
+	case *ast.IntegerNode:
+		return float64(value.Value), true
+	case *ast.FloatNode:
+		return value.Value, true
+	default:
+		return 0, false
+	}
+}
+
+func usesRequestProbe(node ast.Node) bool {
+	return ast.Find(node, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.IdentifierNode)
+		if !ok {
+			return false
+		}
+		switch identifier.Value {
+		case "param", "header", "hour", "minute", "weekday", "month", "day":
+			return true
+		default:
+			return false
+		}
+	}) != nil
+}
+
 type cachedEntry struct {
-	prog     *vm.Program
-	usedVars map[string]bool
-	version  int
+	prog          *vm.Program
+	usedVars      map[string]bool
+	usedUsageKeys map[string]bool
+	version       int
+	fixedPricing  bool
 }
 
 var (
@@ -38,35 +68,39 @@ var (
 )
 
 // compileEnvPrototypeV1 is the v1 type-checking prototype used at compile time.
-var compileEnvPrototypeV1 = map[string]interface{}{
-	"p":       float64(0),
-	"c":       float64(0),
-	"len":     float64(0),
-	"cr":      float64(0),
-	"cc":      float64(0),
-	"cc1h":    float64(0),
-	"cc12h":   float64(0),
-	"img":     float64(0),
-	"img_o":   float64(0),
-	"ai":      float64(0),
-	"ao":      float64(0),
-	"tier":    func(string, float64) float64 { return 0 },
-	"header":  func(string) string { return "" },
-	"param":   func(string) interface{} { return nil },
-	"has":     func(interface{}, string) bool { return false },
-	"hour":    func(string) int { return 0 },
-	"minute":  func(string) int { return 0 },
-	"weekday": func(string) int { return 0 },
-	"month":   func(string) int { return 0 },
-	"day":     func(string) int { return 0 },
-	"max":     math.Max,
-	"min":     math.Min,
-	"abs":     math.Abs,
-	"ceil":    math.Ceil,
-	"floor":   math.Floor,
+var compileEnvPrototypeV1 = map[string]any{
+	"image_count": float64(1),
+	"p":           float64(0),
+	"c":           float64(0),
+	"len":         float64(0),
+	"cr":          float64(0),
+	"cc":          float64(0),
+	"cc1h":        float64(0),
+	"cc12h":       float64(0),
+	"img":         float64(0),
+	"img_cr":      float64(0),
+	"img_o":       float64(0),
+	"ai":          float64(0),
+	"ao":          float64(0),
+	"tier":        func(string, float64) float64 { return 0 },
+	"fixed":       func(float64) float64 { return 0 },
+	"header":      func(string) string { return "" },
+	"param":       func(string) any { return nil },
+	"u":           func(string) any { return nil },
+	"has":         func(any, string) bool { return false },
+	"hour":        func(string) int { return 0 },
+	"minute":      func(string) int { return 0 },
+	"weekday":     func(string) int { return 0 },
+	"month":       func(string) int { return 0 },
+	"day":         func(string) int { return 0 },
+	"max":         math.Max,
+	"min":         math.Min,
+	"abs":         math.Abs,
+	"ceil":        math.Ceil,
+	"floor":       math.Floor,
 }
 
-func getCompileEnv(version int) map[string]interface{} {
+func getCompileEnv(version int) map[string]any {
 	switch version {
 	default:
 		return compileEnvPrototypeV1
@@ -86,29 +120,87 @@ func CompileFromCacheByHash(exprStr, hash string) (*vm.Program, error) {
 }
 
 func compileFromCacheByHash(exprStr, hash string) (*vm.Program, error) {
+	entry, err := compileEntryFromCacheByHash(exprStr, hash)
+	if err != nil {
+		return nil, err
+	}
+	return entry.prog, nil
+}
+
+func compileEntryFromCacheByHash(exprStr, hash string) (*cachedEntry, error) {
 	cacheMu.RLock()
 	if entry, ok := cache[hash]; ok {
 		cacheMu.RUnlock()
-		return entry.prog, nil
+		return entry, nil
 	}
 	cacheMu.RUnlock()
 
 	version, body := ParseExprVersion(exprStr)
+	// Validate before optimization so unreachable fixed-price branches cannot
+	// bypass validation or a host's unsupported-protocol checks.
+	body, err := normalizeLegacyRules(body)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := parser.Parse(body)
+	if err != nil {
+		return nil, fmt.Errorf("expr compile error: %w", err)
+	}
+	fixedPricing := ast.Find(tree.Node, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.IdentifierNode)
+		return ok && identifier.Value == "fixed"
+	}) != nil
+	if fixedPricing {
+		if err := validateFixedPricingTree(tree.Node); err != nil {
+			return nil, fmt.Errorf("expr compile error: %w", err)
+		}
+	}
 	prog, err := expr.Compile(body, expr.Env(getCompileEnv(version)), expr.AsFloat64())
 	if err != nil {
 		return nil, fmt.Errorf("expr compile error: %w", err)
 	}
 
 	vars := extractUsedVars(prog)
-
+	if vars["u"] {
+		for _, key := range chatQuantityVars {
+			if vars[key] {
+				return nil, fmt.Errorf("u() and %s use different billing units", key)
+			}
+		}
+		if fixedPricing {
+			return nil, fmt.Errorf("u() and fixed() use different billing units")
+		}
+		invalid := ast.Find(prog.Node(), func(node ast.Node) bool {
+			call, ok := node.(*ast.CallNode)
+			if !ok {
+				return false
+			}
+			fn, ok := call.Callee.(*ast.IdentifierNode)
+			if !ok || fn.Value != "u" {
+				return false
+			}
+			literal, ok := call.Arguments[0].(*ast.StringNode)
+			return !ok || strings.TrimSpace(literal.Value) == ""
+		})
+		if invalid != nil {
+			return nil, fmt.Errorf("u() requires a literal usage key")
+		}
+	}
+	entry := &cachedEntry{
+		prog:          prog,
+		usedVars:      vars,
+		usedUsageKeys: extractUsedUsageKeys(prog),
+		version:       version,
+		fixedPricing:  fixedPricing,
+	}
 	cacheMu.Lock()
 	if len(cache) >= maxCacheSize {
 		cache = make(map[string]*cachedEntry, 64)
 	}
-	cache[hash] = &cachedEntry{prog: prog, usedVars: vars, version: version}
+	cache[hash] = entry
 	cacheMu.Unlock()
 
-	return prog, nil
+	return entry, nil
 }
 
 // ExprVersion returns the version of a cached expression. Returns DefaultExprVersion
@@ -140,13 +232,38 @@ func extractUsedVars(prog *vm.Program) map[string]bool {
 	return vars
 }
 
+func extractUsedUsageKeys(prog *vm.Program) map[string]bool {
+	keys := make(map[string]bool)
+	ast.Find(prog.Node(), func(node ast.Node) bool {
+		call, ok := node.(*ast.CallNode)
+		if !ok || len(call.Arguments) != 1 {
+			return false
+		}
+		callee, ok := call.Callee.(*ast.IdentifierNode)
+		if !ok || callee.Value != "u" {
+			return false
+		}
+		literal, ok := call.Arguments[0].(*ast.StringNode)
+		if !ok {
+			return false
+		}
+		keys[strings.TrimSpace(literal.Value)] = true
+		return false
+	})
+	return keys
+}
+
 // UsedVars returns the set of identifier names referenced by an expression.
 // The result is cached alongside the compiled program. Returns nil for empty input.
 func UsedVars(exprStr string) map[string]bool {
+	return UsedVarsByHash(exprStr, ExprHashString(exprStr))
+}
+
+// UsedVarsByHash reuses the digest captured by the host's billing snapshot.
+func UsedVarsByHash(exprStr, hash string) map[string]bool {
 	if exprStr == "" {
 		return nil
 	}
-	hash := ExprHashString(exprStr)
 	cacheMu.RLock()
 	if entry, ok := cache[hash]; ok {
 		cacheMu.RUnlock()
@@ -163,6 +280,45 @@ func UsedVars(exprStr string) map[string]bool {
 	cacheMu.RUnlock()
 	if ok {
 		return entry.usedVars
+	}
+	return nil
+}
+
+// chatQuantityVars are the quantities a chat request fills: the token counts of
+// its response and the image count it asks for. Task usage billing has none of
+// them, so there the token counts would read 0 and image_count 1.
+var chatQuantityVars = []string{"p", "c", "len", "cr", "cc", "cc1h", "cc12h", "img", "img_cr", "img_o", "ai", "ao", "image_count"}
+
+// UsesChatQuantities reports whether an expression reads a chat request
+// quantity, including in branches the current request would not evaluate.
+func UsesChatQuantities(exprStr string) bool {
+	usedVars := UsedVars(exprStr)
+	return slices.ContainsFunc(chatQuantityVars, func(name string) bool { return usedVars[name] })
+}
+
+// UsedUsageKeys returns literal keys referenced by u("...") calls. Calls with
+// dynamic arguments are intentionally omitted because they cannot be
+// validated statically.
+func UsedUsageKeys(exprStr string) map[string]bool {
+	if exprStr == "" {
+		return nil
+	}
+	hash := ExprHashString(exprStr)
+	cacheMu.RLock()
+	if entry, ok := cache[hash]; ok {
+		cacheMu.RUnlock()
+		return entry.usedUsageKeys
+	}
+	cacheMu.RUnlock()
+
+	if _, err := compileFromCacheByHash(exprStr, hash); err != nil {
+		return nil
+	}
+	cacheMu.RLock()
+	entry, ok := cache[hash]
+	cacheMu.RUnlock()
+	if ok {
+		return entry.usedUsageKeys
 	}
 	return nil
 }

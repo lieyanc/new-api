@@ -36,6 +36,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		}
 	}
 	other := make(map[string]interface{})
+	InjectTieredBillingInfo(other, info, nil)
 	other["is_task"] = true
 	other["request_path"] = c.Request.URL.Path
 	other["model_price"] = info.PriceData.ModelPrice
@@ -188,6 +189,10 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	if actualQuota <= 0 {
 		return
 	}
+	recalculateTaskQuota(ctx, task, actualQuota, reason)
+}
+
+func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string) {
 	preConsumedQuota := task.Quota
 	quotaDelta := actualQuota - preConsumedQuota
 

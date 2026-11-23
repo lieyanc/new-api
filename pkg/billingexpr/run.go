@@ -11,6 +11,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+const MaxImageCount = 128
+
 // RunExpr compiles (with cache) and executes an expression string.
 // The environment exposes:
 //   - p, c             — prompt / completion tokens (auto-excluding separately-priced sub-categories)
@@ -52,7 +54,21 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 	trace := TraceResult{}
 	headers := normalizeHeaders(request.Headers)
 
+	imageCount := 1
+	if request.ImageCount != nil {
+		imageCount = *request.ImageCount
+		if imageCount < 1 || imageCount > MaxImageCount {
+			return 0, trace, fmt.Errorf("image_count must be between 1 and %d", MaxImageCount)
+		}
+	}
 	env := map[string]interface{}{
+		"image_count": float64(imageCount),
+		"img_cr":      params.ImgCR,
+		"fixed": func(amount float64) float64 {
+			trace.FixedPrice = &amount
+			return amount * 1_000_000
+		},
+		"u":     func(key string) any { return request.Usage[strings.TrimSpace(key)] },
 		"p":     params.P,
 		"c":     params.C,
 		"len":   params.Len,
@@ -108,6 +124,9 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 	f, ok := out.(float64)
 	if !ok {
 		return 0, trace, fmt.Errorf("expr result is %T, want float64", out)
+	}
+	if math.IsInf(f, 0) || math.IsNaN(f) || f < 0 {
+		return 0, trace, fmt.Errorf("invalid billing amount %v", f)
 	}
 	return f, trace, nil
 }

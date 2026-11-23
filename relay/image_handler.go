@@ -134,6 +134,12 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		}
 	}
 
+	if input := info.BillingRequestInput; input != nil && input.ImageCount != nil {
+		if actual := info.PriceData.OtherRatios["n"]; actual > 0 {
+			n := int(actual)
+			input.ImageCount = &n
+		}
+	}
 	if usage.(*dto.Usage).TotalTokens == 0 {
 		usage.(*dto.Usage).TotalTokens = 1
 	}

@@ -1,9 +1,17 @@
 package billingexpr
 
+import (
+	"fmt"
+	"math"
+)
+
 // quotaConversion converts raw expression output to quota based on the
 // expression version. This is the central dispatch point for future versions
 // that may use a different conversion formula.
 func quotaConversion(exprOutput float64, snap *BillingSnapshot) float64 {
+	if snap.TaskUsageBilling {
+		return exprOutput * snap.QuotaPerUnit
+	}
 	switch snap.ExprVersion {
 	default: // v1: coefficients are $/1M tokens prices
 		return exprOutput / 1_000_000 * snap.QuotaPerUnit
@@ -23,10 +31,15 @@ func ComputeTieredQuotaWithRequest(snap *BillingSnapshot, params TokenParams, re
 	}
 
 	quotaBeforeGroup := quotaConversion(cost, snap)
-	afterGroup := QuotaRound(quotaBeforeGroup * snap.GroupRatio)
+	amount := quotaBeforeGroup * snap.GroupRatio
+	if math.IsNaN(amount) || amount < 0 || amount >= float64(math.MaxInt) {
+		return TieredResult{}, fmt.Errorf("billing quota is outside the supported range")
+	}
+	afterGroup := QuotaRound(amount)
 	crossed := trace.MatchedTier != snap.EstimatedTier
 
 	return TieredResult{
+		FixedPrice:             trace.FixedPrice,
 		ActualQuotaBeforeGroup: quotaBeforeGroup,
 		ActualQuotaAfterGroup:  afterGroup,
 		MatchedTier:            trace.MatchedTier,

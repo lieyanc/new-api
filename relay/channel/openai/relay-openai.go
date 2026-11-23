@@ -20,6 +20,7 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/tidwall/gjson"
 )
 
 func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
@@ -585,8 +586,18 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		usageResp.CompletionTokens += usageResp.OutputTokens
 	}
 	if usageResp.InputTokensDetails != nil {
+		if details := usageResp.InputTokensDetails; details.CachedTokensDetails != nil || details.CachedTokens > 0 {
+			usageResp.PromptTokensDetails.CachedTokensDetails = details.CachedTokensDetails
+			usageResp.PromptTokensDetails.CachedTokens = details.CachedTokens
+		}
 		usageResp.PromptTokensDetails.ImageTokens += usageResp.InputTokensDetails.ImageTokens
 		usageResp.PromptTokensDetails.TextTokens += usageResp.InputTokensDetails.TextTokens
+	}
+	if input := info.BillingRequestInput; input != nil && input.ImageCount != nil {
+		if count := gjson.GetBytes(responseBody, "data.#").Int(); count > 0 {
+			n := int(count)
+			input.ImageCount = &n
+		}
 	}
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 	return &usageResp.Usage, nil

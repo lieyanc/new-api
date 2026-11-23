@@ -22,6 +22,10 @@ func copyResponsesCacheDetails(dst, src *dto.InputTokenDetails) {
 		return
 	}
 	dst.CachedTokens = src.CachedTokens
+	dst.CachedTokensDetails = src.CachedTokensDetails
+	if src.CachedTokensDetails != nil {
+		dst.ImageTokens = src.ImageTokens
+	}
 	dst.CachedCreationTokens = src.CachedCreationTokens
 	dst.CacheWriteTokens = src.CacheWriteTokens
 	dst.CacheWriteTokensDetails = src.CacheWriteTokensDetails

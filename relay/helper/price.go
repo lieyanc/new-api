@@ -2,9 +2,11 @@ package helper
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -254,6 +256,13 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		return types.PriceData{}, err
 	}
 
+	if billingexpr.UsedVars(exprStr)["u"] {
+		return types.PriceData{}, fmt.Errorf("u() requires task usage")
+	}
+	if req, ok := info.Request.(*dto.ImageRequest); ok && req.N != nil && billingexpr.UsedVars(exprStr)["image_count"] {
+		n := int(*req.N)
+		requestInput.ImageCount = &n
+	}
 	rawCost, trace, err := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{
 		P:   float64(promptTokens),
 		C:   float64(estimatedCompletionTokens),
@@ -265,7 +274,11 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 
 	// Expression coefficients are $/1M tokens prices; convert to quota the same way per-call billing does.
 	quotaBeforeGroup := rawCost / 1_000_000 * common.QuotaPerUnit
-	preConsumedQuota := billingexpr.QuotaRound(quotaBeforeGroup * groupRatioInfo.GroupRatio)
+	amount := quotaBeforeGroup * groupRatioInfo.GroupRatio
+	if math.IsNaN(amount) || amount < 0 || amount >= float64(math.MaxInt) {
+		return types.PriceData{}, fmt.Errorf("model %s tiered quota is outside the supported range", info.OriginModelName)
+	}
+	preConsumedQuota := billingexpr.QuotaRound(amount)
 
 	freeModel := false
 	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {

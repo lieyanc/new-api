@@ -36,6 +36,8 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 | `cc` | 缓存创建 token 数（Claude 5分钟 TTL / 通用） |
 | `cc1h` | 缓存创建 token 数 — 1小时 TTL（Claude 专用） |
 | `cc12h` | OpenAI 12 小时缓存写入 token 数。单独计价时从 `p` 和缓存写入总量中扣除；省略时按 `cc` 计价，若也省略 `cc` 则按 `p` 计价。 |
+| `img_cr` | 缓存命中的图片输入 token。单独计价时从图片、缓存读取及总输入中分离，避免重复计费。 |
+| `image_count` | 同步图片请求的张数，默认 1，最大 128。渠道返回实际张数时使用实际值结算。 |
 | `img` | 图片输入 token 数 |
 | `ai` | 音频输入 token 数 |
 
@@ -90,6 +92,12 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 | `abs` | `abs(x) → float64` | Absolute value |
 | `ceil` | `ceil(x) → float64` | Ceiling |
 | `floor` | `floor(x) → float64` | Floor |
+
+### Fixed prices and task usage
+
+`tier("request", fixed(0.00075))` charges $0.00075 per successful call. Image requests can use `tier("image", fixed(0.04)) * image_count`.
+
+Asynchronous task expressions such as `tier("base", u("seconds") * 0.4)` return USD directly. Submission freezes the expression, group ratio and estimated quantities. Polling overlays the upstream usage fields and settles the difference. If a quantity is available only on completion, submission reserves the configured pre-consume quota scaled by group ratio. If the final expression cannot be evaluated, the reservation stands and the error is logged.
 
 ### Expression Examples
 

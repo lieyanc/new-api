@@ -19,6 +19,7 @@ export const BILLING_VARS = [
   { key: 'cc1h', field: 'cacheCreate1hPrice', tierField: 'cache_create_1h_unit_cost', label: '1h缓存创建价格', shortLabel: '1h缓存创建', side: 'input', group: 'cache' },
   { key: 'cc12h', field: 'cacheCreate12hPrice', tierField: 'cache_create_12h_unit_cost', label: '12h缓存创建价格', shortLabel: '12h缓存创建', side: 'input', group: 'cache' },
   { key: 'img', field: 'imagePrice', tierField: 'image_unit_cost', label: '图片输入价格', shortLabel: '图片输入', side: 'input', group: 'media' },
+  { key: 'img_cr', field: 'imageCachePrice', tierField: 'image_cache_unit_cost', label: '图片缓存读取价格', shortLabel: '图片缓存读取', side: 'input', group: 'media' },
   { key: 'img_o', field: 'imageOutputPrice', tierField: 'image_output_unit_cost', label: '图片输出价格', shortLabel: '图片输出', side: 'output', group: 'media' },
   { key: 'ai', field: 'audioInputPrice', tierField: 'audio_input_unit_cost', label: '音频输入价格', shortLabel: '音频输入', side: 'input', group: 'media' },
   { key: 'ao', field: 'audioOutputPrice', tierField: 'audio_output_unit_cost', label: '音频补全价格', shortLabel: '音频输出', side: 'output', group: 'media' },

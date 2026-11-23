@@ -1,5 +1,9 @@
 {
   "translation": {
+    "图片缓存读取": "Đọc ảnh từ bộ nhớ đệm",
+    "图片缓存读取价格": "Giá đọc ảnh từ bộ nhớ đệm",
+    "任务用量": "Mức sử dụng của tác vụ",
+    "图片缓存读取 Token (img_cr)": "Đọc ảnh từ bộ nhớ đệm Token (img_cr)",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Tìm kiếm Web {{count}} lần / 1K lần * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Tìm kiếm Web {{count}} lần / 1K lần * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + Gọi tạo hình ảnh {{symbol}}{{price}} / 1 lần * {{ratioType}} {{ratio}}",

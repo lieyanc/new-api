@@ -91,8 +91,16 @@ func smokeTestExpr(exprStr string) error {
 		},
 	}
 
+	facts := map[string]any{}
+	for key := range billingexpr.UsedUsageKeys(exprStr) {
+		facts[key] = 1.0
+		if key == "mode" {
+			facts[key] = "pro"
+		}
+	}
 	for _, v := range vectors {
 		for _, request := range requests {
+			request.Usage = facts
 			result, _, err := billingexpr.RunExprWithRequest(exprStr, v, request)
 			if err != nil {
 				return fmt.Errorf("vector {p=%g, c=%g}: run failed: %w", v.P, v.C, err)

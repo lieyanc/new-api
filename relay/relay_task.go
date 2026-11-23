@@ -13,12 +13,15 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -178,7 +181,33 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 4. 价格计算：基础模型价格
 	info.OriginModelName = modelName
-	priceData, err := helper.ModelPriceHelperPerCall(c, info)
+	expr, _ := billing_setting.GetBillingExpr(modelName)
+	info.TieredBillingSnapshot = nil
+	expressionBilling := billing_setting.GetBillingMode(modelName) == billing_setting.BillingModeTieredExpr && (billingexpr.UsedVars(expr)["u"] || billingexpr.UsesFixedPricing(expr))
+	var priceData types.PriceData
+	var err error
+	if expressionBilling {
+		group := helper.HandleGroupRatio(c, info)
+		req, _ := relaycommon.GetTaskRequest(c)
+		estimates := adaptor.EstimateBilling(c, info)
+		seconds := req.Duration
+		if seconds <= 0 {
+			seconds, _ = strconv.Atoi(req.Seconds)
+		}
+		facts := map[string]any{"clips": 1.0}
+		if seconds > 0 {
+			facts["seconds"] = float64(seconds)
+		}
+		if estimated := estimates["seconds"]; estimated > 0 {
+			facts["seconds"] = estimated
+		}
+		if req.Mode != "" {
+			facts["mode"] = req.Mode
+		}
+		priceData, err = service.TaskExpressionPrice(info, expr, group, facts)
+	} else {
+		priceData, err = helper.ModelPriceHelperPerCall(c, info)
+	}
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
 	}
@@ -187,21 +216,23 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
 	//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
 	//    ResolveOriginTask 可能已在 remix 路径中预设了 OtherRatios，此处合并。
-	if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
-		for k, v := range estimatedRatios {
-			info.PriceData.AddOtherRatio(k, v)
-		}
-	}
-
-	// 6. 将 OtherRatios 应用到基础额度
-	if !common.StringsContains(constant.TaskPricePatches, modelName) {
-		for _, ra := range info.PriceData.OtherRatios {
-			if ra != 1.0 {
-				info.PriceData.Quota = int(float64(info.PriceData.Quota) * ra)
+	if !expressionBilling {
+		if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
+			for k, v := range estimatedRatios {
+				info.PriceData.AddOtherRatio(k, v)
 			}
 		}
-	}
 
+		// 6. 将 OtherRatios 应用到基础额度
+		if !common.StringsContains(constant.TaskPricePatches, modelName) {
+			for _, ra := range info.PriceData.OtherRatios {
+				if ra != 1.0 {
+					info.PriceData.Quota = int(float64(info.PriceData.Quota) * ra)
+				}
+			}
+		}
+
+	}
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
 	if info.Billing == nil && !info.PriceData.FreeModel {
 		info.ForcePreConsume = true
@@ -242,13 +273,15 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
-	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
-		// 基于调整后的 ratios 重新计算 quota
-		finalQuota = recalcQuotaFromRatios(info, adjustedRatios)
-		info.PriceData.OtherRatios = adjustedRatios
-		info.PriceData.Quota = finalQuota
-	}
+	if !expressionBilling {
+		if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
+			// 基于调整后的 ratios 重新计算 quota
+			finalQuota = recalcQuotaFromRatios(info, adjustedRatios)
+			info.PriceData.OtherRatios = adjustedRatios
+			info.PriceData.Quota = finalQuota
+		}
 
+	}
 	return &TaskSubmitResult{
 		UpstreamTaskID: upstreamTaskID,
 		TaskData:       taskData,

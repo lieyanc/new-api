@@ -6,8 +6,10 @@ import (
 )
 
 type RequestInput struct {
-	Headers map[string]string
-	Body    []byte
+	Usage      map[string]any
+	ImageCount *int
+	Headers    map[string]string
+	Body       []byte
 }
 
 // TokenParams holds all token dimensions passed into an Expr evaluation.
@@ -22,6 +24,7 @@ type TokenParams struct {
 	CC1h  float64 // cache creation tokens — 1-hour TTL (Claude only)
 	CC12h float64 // OpenAI cache creation tokens with a 12-hour TTL
 	Img   float64 // image input tokens
+	ImgCR float64 // image tokens served from cache
 	ImgO  float64 // image output tokens
 	AI    float64 // audio input tokens
 	AO    float64 // audio output tokens
@@ -31,6 +34,7 @@ type TokenParams struct {
 // during Expr execution. This replaces the old Breakdown mechanism —
 // the Expr itself is the single source of truth for billing logic.
 type TraceResult struct {
+	FixedPrice  *float64
 	MatchedTier string  `json:"matched_tier"`
 	Cost        float64 `json:"cost"`
 }
@@ -38,26 +42,29 @@ type TraceResult struct {
 // BillingSnapshot captures the billing rule state frozen at pre-consume time.
 // It is fully serializable and contains no compiled program pointers.
 type BillingSnapshot struct {
-	BillingMode               string  `json:"billing_mode"`
-	ModelName                 string  `json:"model_name"`
-	ExprString                string  `json:"expr_string"`
-	ExprHash                  string  `json:"expr_hash"`
-	GroupRatio                float64 `json:"group_ratio"`
-	EstimatedPromptTokens     int     `json:"estimated_prompt_tokens"`
-	EstimatedCompletionTokens int     `json:"estimated_completion_tokens"`
-	EstimatedQuotaBeforeGroup float64 `json:"estimated_quota_before_group"`
-	EstimatedQuotaAfterGroup  int     `json:"estimated_quota_after_group"`
-	EstimatedTier             string  `json:"estimated_tier"`
-	QuotaPerUnit              float64 `json:"quota_per_unit"`
-	ExprVersion               int     `json:"expr_version"`
+	TaskUsageBilling          bool           `json:"task_usage_billing,omitempty"`
+	UsageFacts                map[string]any `json:"usage_facts,omitempty"`
+	BillingMode               string         `json:"billing_mode"`
+	ModelName                 string         `json:"model_name"`
+	ExprString                string         `json:"expr_string"`
+	ExprHash                  string         `json:"expr_hash"`
+	GroupRatio                float64        `json:"group_ratio"`
+	EstimatedPromptTokens     int            `json:"estimated_prompt_tokens"`
+	EstimatedCompletionTokens int            `json:"estimated_completion_tokens"`
+	EstimatedQuotaBeforeGroup float64        `json:"estimated_quota_before_group"`
+	EstimatedQuotaAfterGroup  int            `json:"estimated_quota_after_group"`
+	EstimatedTier             string         `json:"estimated_tier"`
+	QuotaPerUnit              float64        `json:"quota_per_unit"`
+	ExprVersion               int            `json:"expr_version"`
 }
 
 // TieredResult holds everything needed after running tiered settlement.
 type TieredResult struct {
-	ActualQuotaBeforeGroup float64 `json:"actual_quota_before_group"`
-	ActualQuotaAfterGroup  int     `json:"actual_quota_after_group"`
-	MatchedTier            string  `json:"matched_tier"`
-	CrossedTier            bool    `json:"crossed_tier"`
+	FixedPrice             *float64 `json:"fixed_price,omitempty"`
+	ActualQuotaBeforeGroup float64  `json:"actual_quota_before_group"`
+	ActualQuotaAfterGroup  int      `json:"actual_quota_after_group"`
+	MatchedTier            string   `json:"matched_tier"`
+	CrossedTier            bool     `json:"crossed_tier"`
 }
 
 // ExprHashString returns the SHA-256 hex digest of an expression string.

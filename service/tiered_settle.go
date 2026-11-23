@@ -39,6 +39,35 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	}
 
 	img := float64(usage.PromptTokensDetails.ImageTokens)
+	imgCR := float64(0)
+	if usedVars["img_cr"] && !isClaudeUsageSemantic {
+		details := usage.PromptTokensDetails.CachedTokensDetails
+		if details != nil && details.ImageTokens != nil {
+			cachedImage := *details.ImageTokens
+			cached := usage.PromptTokensDetails.CachedTokens
+			image := usage.PromptTokensDetails.ImageTokens
+			valid := cachedImage >= 0 && cached >= cachedImage && image >= cachedImage &&
+				cached <= usage.PromptTokens && image <= usage.PromptTokens-(cached-cachedImage)
+			if valid {
+				remaining := cached - cachedImage
+				for _, count := range []*int{details.TextTokens, details.AudioTokens} {
+					if count == nil {
+						continue
+					}
+					if *count < 0 || *count > remaining {
+						valid = false
+						break
+					}
+					remaining -= *count
+				}
+			}
+			if valid {
+				imgCR = float64(cachedImage)
+				cr -= imgCR
+				img -= imgCR
+			}
+		}
+	}
 	ai := float64(usage.PromptTokensDetails.AudioTokens)
 	imgO := float64(usage.CompletionTokenDetails.ImageTokens)
 	ao := float64(usage.CompletionTokenDetails.AudioTokens)
@@ -55,7 +84,7 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		if usedVars["cr"] {
 			p -= cr
 		}
-		p -= cc12h
+		p -= cc12h + imgCR
 		if usedVars["cc"] {
 			p -= cc
 		}
@@ -92,6 +121,7 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		CC1h:  cc1h,
 		CC12h: cc12h,
 		Img:   img,
+		ImgCR: imgCR,
 		ImgO:  imgO,
 		AI:    ai,
 		AO:    ao,

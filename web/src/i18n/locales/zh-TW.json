@@ -1,5 +1,10 @@
 {
   "translation": {
+    "图片缓存读取": "圖片快取讀取",
+    "图片缓存读取价格": "圖片快取讀取價格",
+    "任务用量": "任務用量",
+    "请求参数": "請求參數",
+    "图片缓存读取 Token (img_cr)": "圖片快取讀取 Token (img_cr)",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web搜尋 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + 圖片生成調用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + 檔案搜尋 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

@@ -1,5 +1,10 @@
 {
   "translation": {
+    "图片缓存读取": "Image en cache",
+    "图片缓存读取价格": "Prix de lecture d’image en cache",
+    "任务用量": "Utilisation de la tâche",
+    "请求参数": "Paramètres de requête",
+    "图片缓存读取 Token (img_cr)": "Image en cache Token (img_cr)",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Recherche Web {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_many": " + Recherche Web {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Recherche Web {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

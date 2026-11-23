@@ -226,6 +226,7 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 			continue
 		}
 
+		previousStatus := task.Status
 		task.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(task.Status)
 		task.FailReason = lo.If(responseItem.FailReason != "", responseItem.FailReason).Else(task.FailReason)
 		task.SubmitTime = lo.If(responseItem.SubmitTime != 0, responseItem.SubmitTime).Else(task.SubmitTime)
@@ -241,6 +242,18 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 		}
 		task.Data = responseItem.Data
 
+		if bc := task.PrivateData.BillingContext; bc != nil && bc.Expression != nil && bc.Expression.TaskUsageBilling && task.Status == model.TaskStatusSuccess {
+			if previousStatus != task.Status {
+				won, err := task.UpdateWithStatus(previousStatus)
+				if err != nil {
+					return err
+				}
+				if won {
+					settleTaskBillingOnComplete(ctx, adaptor, task, &relaycommon.TaskInfo{})
+				}
+			}
+			continue
+		}
 		err = task.Update()
 		if err != nil {
 			common.SysLog("UpdateSunoTask task error: " + err.Error())
@@ -541,6 +554,21 @@ func truncateBase64(s string) string {
 //  2. taskResult.TotalTokens > 0 → 按 token 重算
 //  3. 都不满足 → 保持预扣额度不变
 func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) {
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.Expression != nil {
+		snap := bc.Expression
+		if snap.TaskUsageBilling {
+			quota, err := completedTaskExpressionQuota(task, taskResult, snap)
+			if err != nil {
+				logger.LogError(ctx, fmt.Sprintf("task %s usage billing: %v", task.TaskID, err))
+				return
+			}
+			recalculateTaskQuota(ctx, task, quota, "任务用量表达式")
+			if err := model.DB.Model(task).Update("quota", task.Quota).Error; err != nil {
+				logger.LogError(ctx, err.Error())
+			}
+		}
+		return
+	}
 	// 0. 按次计费的任务不做差额结算
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))

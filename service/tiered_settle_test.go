@@ -8,8 +8,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/shopspring/decimal"
 )
 
@@ -855,4 +857,31 @@ func BenchmarkRatioBilling_Parallel(b *testing.B) {
 			ratioQuota(usage, false, 1.5, 5.0, 0.1, 1.0, 1.5)
 		}
 	})
+}
+
+func TestCachedImageExpressionSeparatesOverlappingTokens(t *testing.T) {
+	var usage dto.Usage
+	err := common.UnmarshalJsonStr(`{"prompt_tokens":1000,"prompt_tokens_details":{"cached_tokens":300,"image_tokens":400,"cached_tokens_details":{"image_tokens":200}}}`, &usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expr := `tier("standard",p*5+cr*1.25+img*8+img_cr*2+c*30)`
+	params := BuildTieredTokenParams(&usage, false, billingexpr.UsedVars(expr))
+	cost, _, err := billingexpr.RunExpr(expr, params)
+	if err != nil || cost != 4625 || params.Len != 1000 {
+		t.Fatalf("params %+v, cost %v, err %v", params, cost, err)
+	}
+}
+
+func TestTaskUsageExpressionSettlesMeasuredSeconds(t *testing.T) {
+	info := &relaycommon.RelayInfo{}
+	price, err := TaskExpressionPrice(info, `tier("video",u("seconds")*0.4)`, types.GroupRatioInfo{GroupRatio: 0.5}, map[string]any{"seconds": 5.0})
+	if err != nil || price.Quota != int(common.QuotaPerUnit) {
+		t.Fatalf("estimate %+v, %v", price, err)
+	}
+	task := &model.Task{Data: []byte(`{"usage":{"duration":3}}`)}
+	got, err := completedTaskExpressionQuota(task, &relaycommon.TaskInfo{}, info.TieredBillingSnapshot)
+	if err != nil || got != billingexpr.QuotaRound(common.QuotaPerUnit*0.6) {
+		t.Fatalf("actual %d, %v", got, err)
+	}
 }

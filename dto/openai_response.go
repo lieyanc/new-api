@@ -252,7 +252,14 @@ type OpenAIVideoResponse struct {
 	Purpose   string `json:"purpose" example:"fine-tune"`
 }
 
+type CachedTokenDetails struct {
+	ImageTokens *int `json:"image_tokens,omitempty"`
+	TextTokens  *int `json:"text_tokens,omitempty"`
+	AudioTokens *int `json:"audio_tokens,omitempty"`
+}
+
 type InputTokenDetails struct {
+	CachedTokensDetails     *CachedTokenDetails     `json:"cached_tokens_details,omitempty"`
 	CachedTokens            int                     `json:"cached_tokens"`
 	CachedCreationTokens    int                     `json:"cached_creation_tokens,omitempty"`
 	CacheWriteTokens        int                     `json:"cache_write_tokens,omitempty"`
